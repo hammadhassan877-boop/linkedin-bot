@@ -1,102 +1,48 @@
 import streamlit as st
-import openai
+import anthropic
 import requests
 import json
 
-# --- INITIAL CONFIG ---
-st.set_page_config(page_title="LinkedIn AI Ghostwriter", page_icon="📝")
-st.title("🚀 LinkedIn AI Ghostwriter & Strategist")
+# --- APP CONFIGURATION ---
+st.set_page_config(page_title="LinkedIn AI Strategist", page_icon="📈", layout="wide")
 
-# Sidebar: Credentials
+# --- STYLING ---
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #0077b5; color: white; }
+    .stTextArea textarea { border-radius: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- SIDEBAR / CREDENTIALS ---
 with st.sidebar:
-    st.header("🔑 API Credentials")
-    openai_key = st.text_input("OpenAI API Key", type="password")
-    li_access_token = st.text_input("LinkedIn Access Token", type="password")
-    li_member_id = st.text_input("LinkedIn Member ID (URN)", help="Format: urn:li:person:XXXX")
+    st.title("Settings")
+    st.info("Ensure your API keys are set in Streamlit Secrets or entered below.")
+    
+    # Try to get keys from secrets, otherwise use inputs
+    claude_key = st.secrets.get("CLAUDE_API_KEY", st.text_input("Claude API Key", type="password"))
+    li_token = st.secrets.get("LINKEDIN_ACCESS_TOKEN", st.text_input("LinkedIn Token", type="password"))
+    li_urn = st.secrets.get("LINKEDIN_PERSON_URN", st.text_input("LinkedIn URN (e.g., urn:li:person:ID)"))
 
-# --- STEP 1: DATA INGESTION & GAP ANALYSIS ---
+# Initialize Claude Client
+if claude_key:
+    client = anthropic.Anthropic(api_key=claude_key)
+
+# --- STATE MANAGEMENT ---
 if "step" not in st.session_state: st.session_state.step = 1
+if "analysis" not in st.session_state: st.session_state.analysis = ""
+if "posts" not in st.session_state: st.session_state.posts = []
 
-if st.session_state.step == 1:
-    st.header("1. Profile Gap Analysis")
-    profile_text = st.text_area("Paste your LinkedIn 'About' and 'Experience' text here:")
-    goal = st.selectbox("What is your goal?", ["Build Authority", "Generate Leads", "Find a Job"])
+# --- AI HELPER FUNCTION ---
+def ask_claude(system_prompt, user_prompt):
+    message = client.messages.create(
+        model="claude-3-5-sonnet-20240620",
+        max_tokens=2000,
+        temperature=0.7,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}]
+    )
+    return message.content[0].text
 
-    if st.button("Analyze My Profile"):
-        if not openai_key: st.error("Please enter OpenAI Key")
-        else:
-            client = openai.OpenAI(api_key=openai_key)
-            prompt = f"Act as a LinkedIn coach. Analyze this profile: {profile_text}. Identify 3 gaps compared to a {goal} goal. Provide a weekly 5-item checklist."
-            
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            st.session_state.analysis = response.choices[0].message.content
-            st.session_state.step = 2
-            st.rerun()
-
-# --- STEP 2: CONTENT INTERVIEW ---
-if st.session_state.step == 2:
-    st.header("2. Weekly Content Interview")
-    st.info("The AI needs 'fuel' to make your posts sound like you.")
-    
-    with st.form("interview"):
-        q1 = st.text_input("What is one specific win or lesson from your work this week?")
-        q2 = st.text_input("What is a common myth in your industry you want to debunk?")
-        q3 = st.text_input("What is one resource or tool that helped you lately?")
-        
-        if st.form_submit_button("Generate Weekly Content"):
-            client = openai.OpenAI(api_key=openai_key)
-            gen_prompt = f"Based on these answers: {q1}, {q2}, {q3}. Write 3 LinkedIn posts. Post 1: Authority. Post 2: Opinion. Post 3: Resource. Use hooks and line breaks."
-            
-            resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": gen_prompt}]
-            )
-            st.session_state.posts = resp.choices[0].message.content
-            st.session_state.step = 3
-            st.rerun()
-
-# --- STEP 3: REVIEW & POST ---
-if st.session_state.step == 3:
-    st.header("3. Your Weekly Plan & Posts")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📋 Weekly Checklist")
-        st.markdown(st.session_state.analysis)
-        
-    with col2:
-        st.subheader("✍️ Drafted Posts")
-        # Split posts by keyword 'Post' to show them individually
-        post_list = st.session_state.posts.split("Post ")
-        for i, p in enumerate(post_list[1:]):
-            content = st.text_area(f"Edit Post {i+1}", value=p, height=200)
-            
-            if st.button(f"🚀 Publish Post {i+1} to LinkedIn"):
-                # LINKEDIN API CALL
-                url = "https://api.linkedin.com/v2/ugcPosts"
-                headers = {
-                    "Authorization": f"Bearer {li_access_token}",
-                    "X-Restli-Protocol-Version": "2.0.0",
-                    "Content-Type": "application/json"
-                }
-                post_data = {
-                    "author": li_member_id,
-                    "lifecycleState": "PUBLISHED",
-                    "specificContent": {
-                        "com.linkedin.ugc.ShareContent": {
-                            "shareCommentary": {"text": content},
-                            "shareMediaCategory": "NONE"
-                        }
-                    },
-                    "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"}
-                }
-                res = requests.post(url, headers=headers, json=post_data)
-                if res.status_code == 201: st.success("Post live!")
-                else: st.error(f"Error: {res.text}")
-
-    if st.button("Start Over"):
-        st.session_state.step = 1
-        st.rerun()
+#
